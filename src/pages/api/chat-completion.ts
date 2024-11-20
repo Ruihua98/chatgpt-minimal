@@ -7,8 +7,10 @@ export const config = {
 
 const handler = async (req: Request): Promise<Response> => {
   try {
-    const { messages } = (await req.json()) as {
-      messages: Message[]
+    const { messages,chat_id,starting_message_id } = (await req.json()) as {
+      messages: Message[],
+      chat_id: string,
+      starting_message_id: string
     }
 
     const charLimit = 12000
@@ -30,6 +32,16 @@ const handler = async (req: Request): Promise<Response> => {
     let apiUrl: string
     let apiKey: string
     let model: string
+
+    apiUrl = "http://localhost:5000/api/agent/autogen?modelPreference=gpt-4o-mini~2024-07-18"
+    apiKey = "Bearer xxx"
+
+    if (chat_id !== "") {
+      apiUrl = apiUrl + "&chatId=" + chat_id
+    }
+    if (starting_message_id !== "") {
+      apiUrl = apiUrl + "&startingMessageId=" + starting_message_id
+    }
     if (useAzureOpenAI) {
       let apiBaseUrl = process.env.AZURE_OPENAI_API_BASE_URL
       const version = '2024-02-01'
@@ -37,20 +49,19 @@ const handler = async (req: Request): Promise<Response> => {
       if (apiBaseUrl && apiBaseUrl.endsWith('/')) {
         apiBaseUrl = apiBaseUrl.slice(0, -1)
       }
-      apiUrl = `${apiBaseUrl}/openai/deployments/${deployment}/chat/completions?api-version=${version}`
-      apiKey = process.env.AZURE_OPENAI_API_KEY || ''
+      // apiUrl = `${apiBaseUrl}/openai/deployments/${deployment}/chat/completions?api-version=${version}`
+      // apiKey = process.env.AZURE_OPENAI_API_KEY || ''
       model = '' // Azure Open AI always ignores the model and decides based on the deployment name passed through.
     } else {
       let apiBaseUrl = process.env.OPENAI_API_BASE_URL || 'https://api.openai.com'
       if (apiBaseUrl && apiBaseUrl.endsWith('/')) {
         apiBaseUrl = apiBaseUrl.slice(0, -1)
       }
-      apiUrl = `${apiBaseUrl}/v1/chat/completions`
-      apiKey = process.env.OPENAI_API_KEY || ''
+      // apiUrl = `${apiBaseUrl}/v1/chat/completions`
+      // apiKey = process.env.OPENAI_API_KEY || ''
       model = 'gpt-3.5-turbo' // todo: allow this to be passed through from client and support gpt-4
     }
     const stream = await OpenAIStream(apiUrl, apiKey, model, messagesToSend)
-
     return new Response(stream)
   } catch (error) {
     console.error(error)
@@ -61,6 +72,14 @@ const handler = async (req: Request): Promise<Response> => {
 const OpenAIStream = async (apiUrl: string, apiKey: string, model: string, messages: Message[]) => {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
+  let mybody = JSON.stringify({})
+  if (apiUrl.includes('chatId')) {
+    mybody = JSON.stringify({})
+  }else{
+    mybody = JSON.stringify({
+      user_message: messages[messages.length-1]['content']
+    })
+  }
   const res = await fetch(apiUrl, {
     headers: {
       'Content-Type': 'application/json',
@@ -68,22 +87,23 @@ const OpenAIStream = async (apiUrl: string, apiKey: string, model: string, messa
       'api-key': `${apiKey}`
     },
     method: 'POST',
-    body: JSON.stringify({
-      model: model,
-      frequency_penalty: 0,
-      max_tokens: 4000,
-      messages: [
-        {
-          role: 'system',
-          content: `You are an AI assistant that helps people find information.`
-        },
-        ...messages
-      ],
-      presence_penalty: 0,
-      stream: true,
-      temperature: 0.7,
-      top_p: 0.95
-    })
+    // body: JSON.stringify({
+    //   model: model,
+    //   frequency_penalty: 0,
+    //   max_tokens: 4000,
+    //   messages: [
+    //     {
+    //       role: 'system',
+    //       content: `You are an AI assistant that helps people find information.`
+    //     },
+    //     ...messages
+    //   ],
+    //   presence_penalty: 0,
+    //   stream: true,
+    //   temperature: 0.7,
+    //   top_p: 0.95
+    // })
+    body: mybody
   })
 
   if (res.status !== 200) {
@@ -119,8 +139,13 @@ const OpenAIStream = async (apiUrl: string, apiKey: string, model: string, messa
 
       for await (const chunk of res.body as any) {
         const str = decoder.decode(chunk).replace('[DONE]\n', '[DONE]\n\n')
+        
         parser.feed(str)
+        controller.enqueue(str)
       }
+      
+      controller.close()
+      return
     }
   })
 }
